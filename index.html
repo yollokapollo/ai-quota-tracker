@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Limit Tracker</title>
+  <style>
+    :root { --bg: #1e1e2e; --card: #313244; --input: #45475a; --text: #cdd6f4; --accent: #89b4fa; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    h1 { color: var(--accent); margin: 0; font-size: 1.5rem; }
+    .badge { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--input); }
+    .badge.live { background: var(--green); color: #11111b; font-weight: bold; }
+    .card, form { background: var(--card); padding: 1rem; border-radius: 10px; margin-bottom: 1rem; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    input, select, button { padding: 0.6rem; border-radius: 6px; border: none; background: var(--input); color: #fff; font-size: 0.95rem; }
+    input, select { flex: 1; min-width: 140px; }
+    button { background: var(--accent); color: #11111b; font-weight: bold; cursor: pointer; }
+    button.secondary { background: var(--input); color: var(--text); }
+    button.del { background: var(--red); padding: 0.35rem 0.65rem; margin-left: 0.75rem; }
+    .quick-btns { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+    .quick-btns button { font-size: 0.8rem; padding: 0.35rem 0.6rem; background: var(--input); color: var(--text); }
+    .item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--input); padding: 0.8rem 0; }
+    .item:last-child { border-bottom: none; }
+    .countdown { font-family: monospace; font-size: 1.15rem; color: var(--green); }
+    .ready { color: var(--yellow); font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>AI Limit Tracker</h1>
+      <span id="modeBadge" class="badge">Demo-Modus (Öffentlich)</span>
+    </div>
+    <button class="secondary" onclick="toggleAuth()">Login / Config</button>
+  </header>
+
+  <div id="authBox" class="card" style="display:none;">
+    <p style="margin-top:0; font-size:0.9rem;">Verbinde dein privates GitHub Gist für deine echten E-Mail-Accounts (wird nur lokal im Browser gespeichert):</p>
+    <div class="row">
+      <input id="gistId" placeholder="Privates Gist ID">
+      <input id="ghToken" type="password" placeholder="GitHub Token (Gist-Berechtigung)">
+      <button onclick="saveAuth()">Verbinden</button>
+      <button class="secondary" onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <form onsubmit="addEntry(event)">
+    <div class="row">
+      <select id="ai">
+        <option>Claude</option>
+        <option>ChatGPT</option>
+        <option>Gemini</option>
+        <option>DeepSeek</option>
+      </select>
+      <input id="account" placeholder="Account / E-Mail" required>
+      <input id="resetTime" type="datetime-local" required>
+      <button type="submit">Hinzufügen</button>
+    </div>
+    <div class="quick-btns">
+      <button type="button" onclick="setQuickTime(3)">+3 Std</button>
+      <button type="button" onclick="setQuickTime(5)">+5 Std</button>
+      <button type="button" onclick="setQuickTime(24)">+24 Std</button>
+    </div>
+  </form>
+
+  <div id="list" class="card">Lade Einträge...</div>
+
+  <script>
+    // Öffentliche Demo-Daten für Besucher / Bewerbungen (keine echten Daten im Repo!)
+    const DEMO_DATA = [
+      { id: 1, ai: "Claude", account: "max.mustermann@example.com", resetTime: Date.now() + 2 * 3600000 },
+      { id: 2, ai: "Claude", account: "maria.musterfrau@example.com", resetTime: Date.now() + 4.5 * 3600000 },
+      { id: 3, ai: "DeepSeek", account: "max.mustermann@example.com", resetTime: Date.now() - 60000 }
+    ];
+
+    let items = [];
+    const getAuth = () => ({
+      gistId: localStorage.getItem('ai_gist_id'),
+      token: localStorage.getItem('ai_gh_token')
+    });
+
+    function toggleAuth() {
+      const box = document.getElementById('authBox');
+      box.style.display = box.style.display === 'none' ? 'block' : 'none';
+      document.getElementById('gistId').value = getAuth().gistId || '';
+      document.getElementById('ghToken').value = getAuth().token || '';
+    }
+
+    function saveAuth() {
+      localStorage.setItem('ai_gist_id', document.getElementById('gistId').value.trim());
+      localStorage.setItem('ai_gh_token', document.getElementById('ghToken').value.trim());
+      document.getElementById('authBox').style.display = 'none';
+      loadData();
+    }
+
+    function logout() {
+      localStorage.removeItem('ai_gist_id');
+      localStorage.removeItem('ai_gh_token');
+      document.getElementById('authBox').style.display = 'none';
+      loadData();
+    }
+
+    async function loadData() {
+      const { gistId, token } = getAuth();
+      const badge = document.getElementById('modeBadge');
+
+      if (!gistId || !token) {
+        badge.textContent = "Demo-Modus (Öffentlich)";
+        badge.classList.remove('live');
+        items = JSON.parse(JSON.stringify(DEMO_DATA));
+        render();
+        return;
+      }
+
+      try {
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          headers: { Authorization: `token ${token}` }
+        });
+        if (!res.ok) throw new Error("Gist nicht erreichbar");
+        const gist = await res.json();
+        const file = gist.files['limits.json'];
+        items = file ? JSON.parse(file.content) : [];
+        badge.textContent = "Privat-Modus (Cloud Sync)";
+        badge.classList.add('live');
+        render();
+      } catch (err) {
+        alert("Fehler beim Laden deines privaten Gists. Prüfe Token und Gist-ID.");
+      }
+    }
+
+    async function saveData() {
+      const { gistId, token } = getAuth();
+      render();
+      if (!gistId || !token) return; // Im Demo-Modus nur temporär im RAM ändern
+
+      await fetch(`https://api.github.com/gists/${gistId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: { 'limits.json': { content: JSON.stringify(items, null, 2) } }
+        })
+      });
+    }
+
+    function setQuickTime(hours) {
+      const d = new Date(Date.now() + hours * 3600000);
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      document.getElementById('resetTime').value = d.toISOString().slice(0, 16);
+    }
+
+    function addEntry(e) {
+      e.preventDefault();
+      items.push({
+        id: Date.now(),
+        ai: document.getElementById('ai').value,
+        account: document.getElementById('account').value,
+        resetTime: new Date(document.getElementById('resetTime').value).getTime()
+      });
+      saveData();
+      e.target.reset();
+    }
+
+    function removeEntry(id) {
+      items = items.filter(i => i.id !== id);
+      saveData();
+    }
+
+    function render() {
+      const list = document.getElementById('list');
+      if (!items.length) { list.innerHTML = 'Keine Einträge vorhanden.'; return; }
+      items.sort((a, b) => a.resetTime - b.resetTime);
+      list.innerHTML = items.map(i => `
+        <div class="item">
+          <div>
+            <strong>${i.ai}</strong> &ndash; ${i.account}<br>
+            <small>Verfügbar ab: ${new Date(i.resetTime).toLocaleString('de-DE')}</small>
+          </div>
+          <div>
+            <span class="countdown" data-time="${i.resetTime}">...</span>
+            <button class="del" onclick="removeEntry(${i.id})">X</button>
+          </div>
+        </div>
+      `).join('');
+      updateCountdowns();
+    }
+
+    function updateCountdowns() {
+      const now = Date.now();
+      document.querySelectorAll('.countdown').forEach(el => {
+        const diff = parseInt(el.dataset.time) - now;
+        if (diff <= 0) {
+          el.textContent = 'VERFÜGBAR!';
+          el.classList.add('ready');
+        } else {
+          const h = Math.floor(diff / 3600000);
+          const m = Math.floor((diff % 3600000) / 60000);
+          const s = Math.floor((diff % 60000) / 1000);
+          el.textContent = `${h}h ${m}m ${s}s`;
+        }
+      });
+    }
+
+    setInterval(updateCountdowns, 1000);
+    loadData();
+  </script>
+</body>
+</html>
