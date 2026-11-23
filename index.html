@@ -3,26 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Limit Tracker</title>
+  <title>AI Quota Tracker</title>
   <style>
     :root { --bg: #1e1e2e; --card: #313244; --input: #45475a; --text: #cdd6f4; --accent: #89b4fa; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 0.5rem; flex-wrap: wrap; }
     h1 { color: var(--accent); margin: 0; font-size: 1.5rem; }
     .badge { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--input); }
     .badge.live { background: var(--green); color: #11111b; font-weight: bold; }
     .card, form { background: var(--card); padding: 1rem; border-radius: 10px; margin-bottom: 1rem; }
-    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
     input, select, button { padding: 0.6rem; border-radius: 6px; border: none; background: var(--input); color: #fff; font-size: 0.95rem; }
-    input, select { flex: 1; min-width: 140px; }
+    input, select { flex: 1; min-width: 130px; }
+    input.time-24 { max-width: 115px; min-width: 95px; font-family: monospace; text-align: center; }
+    input.date-iso { max-width: 165px; min-width: 145px; font-family: monospace; }
     button { background: var(--accent); color: #11111b; font-weight: bold; cursor: pointer; }
     button.secondary { background: var(--input); color: var(--text); }
-    button.del { background: var(--red); padding: 0.35rem 0.65rem; margin-left: 0.75rem; }
-    .quick-btns { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
-    .quick-btns button { font-size: 0.8rem; padding: 0.35rem 0.6rem; background: var(--input); color: var(--text); }
-    .item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--input); padding: 0.8rem 0; }
+    button.edit { background: var(--yellow); color: #11111b; padding: 0.35rem 0.65rem; font-size: 0.85rem; }
+    button.del { background: var(--red); color: #11111b; padding: 0.35rem 0.65rem; font-size: 0.85rem; margin-left: 0.4rem; }
+    .quick-btns { display: flex; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; align-items: center; }
+    .quick-btns button { font-size: 0.8rem; padding: 0.35rem 0.65rem; background: var(--input); color: var(--text); }
+    .item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--input); padding: 0.8rem 0; gap: 0.75rem; flex-wrap: wrap; }
     .item:last-child { border-bottom: none; }
-    .countdown { font-family: monospace; font-size: 1.15rem; color: var(--green); }
+    .actions { display: flex; align-items: center; gap: 0.25rem; }
+    .countdown { font-family: monospace; font-size: 1.15rem; color: var(--green); margin-right: 0.5rem; }
     .ready { color: var(--yellow); font-weight: bold; }
   </style>
 </head>
@@ -30,7 +34,7 @@
 
   <header>
     <div>
-      <h1>AI Limit Tracker</h1>
+      <h1>AI Quota Tracker</h1>
       <span id="modeBadge" class="badge">Demo-Modus (Öffentlich)</span>
     </div>
     <button class="secondary" onclick="toggleAuth()">Login / Config</button>
@@ -46,7 +50,7 @@
     </div>
   </div>
 
-  <form onsubmit="addEntry(event)">
+  <form id="quotaForm" onsubmit="submitEntry(event)">
     <div class="row">
       <select id="ai">
         <option>Claude</option>
@@ -55,8 +59,10 @@
         <option>DeepSeek</option>
       </select>
       <input id="account" placeholder="Account / E-Mail" required>
-      <input id="resetTime" type="datetime-local" required>
-      <button type="submit">Hinzufügen</button>
+      <input id="resetDate" class="date-iso" type="date" required>
+      <input id="resetTime24" class="time-24" type="text" inputmode="numeric" pattern="^([01]\d|2[0-3]):[0-5]\d$" placeholder="HH:MM (z.B. 22:30)" title="24-Stunden-Format HH:MM, z. B. 22:30" required>
+      <button id="submitBtn" type="submit">Hinzufügen</button>
+      <button id="cancelEditBtn" type="button" class="secondary" style="display:none;" onclick="cancelEdit()">Abbrechen</button>
     </div>
     <div class="quick-btns">
       <button type="button" onclick="setQuickTime(3)">+3 Std</button>
@@ -68,7 +74,6 @@
   <div id="list" class="card">Lade Einträge...</div>
 
   <script>
-    // Öffentliche Demo-Daten für Besucher / Bewerbungen (keine echten Daten im Repo!)
     const DEMO_DATA = [
       { id: 1, ai: "Claude", account: "max.mustermann@example.com", resetTime: Date.now() + 2 * 3600000 },
       { id: 2, ai: "Claude", account: "maria.musterfrau@example.com", resetTime: Date.now() + 4.5 * 3600000 },
@@ -76,10 +81,45 @@
     ];
 
     let items = [];
+    let editingId = null;
+
     const getAuth = () => ({
-      gistId: localStorage.getItem('ai_gist_id'),
-      token: localStorage.getItem('ai_gh_token')
+      gistId: localStorage.getItem('ai_quota_gist_id'),
+      token: localStorage.getItem('ai_quota_gh_token')
     });
+
+    function pad2(n) {
+      return String(n).padStart(2, '0');
+    }
+
+    function setDateTimeInputsFromTimestamp(ts) {
+      const d = new Date(ts);
+      const yyyy = d.getFullYear();
+      const mm = pad2(d.getMonth() + 1);
+      const dd = pad2(d.getDate());
+      const hh = pad2(d.getHours());
+      const min = pad2(d.getMinutes());
+      document.getElementById('resetDate').value = `${yyyy}-${mm}-${dd}`;
+      document.getElementById('resetTime24').value = `${hh}:${min}`;
+    }
+
+    function parseDateTimeInputs() {
+      const dateStr = document.getElementById('resetDate').value.trim();
+      const timeStr = document.getElementById('resetTime24').value.trim();
+      const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(timeStr);
+      if (!dateStr || !match) {
+        alert("Bitte Uhrzeit im 24h-Format HH:MM eingeben (z. B. 22:30).");
+        return null;
+      }
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const hh = Number(match[1]);
+      const min = Number(match[2]);
+      return new Date(y, m - 1, d, hh, min, 0, 0).getTime();
+    }
+
+    function setQuickTime(hours) {
+      setDateTimeInputsFromTimestamp(Date.now() + hours * 3600000);
+    }
 
     function toggleAuth() {
       const box = document.getElementById('authBox');
@@ -89,15 +129,15 @@
     }
 
     function saveAuth() {
-      localStorage.setItem('ai_gist_id', document.getElementById('gistId').value.trim());
-      localStorage.setItem('ai_gh_token', document.getElementById('ghToken').value.trim());
+      localStorage.setItem('ai_quota_gist_id', document.getElementById('gistId').value.trim());
+      localStorage.setItem('ai_quota_gh_token', document.getElementById('ghToken').value.trim());
       document.getElementById('authBox').style.display = 'none';
       loadData();
     }
 
     function logout() {
-      localStorage.removeItem('ai_gist_id');
-      localStorage.removeItem('ai_gh_token');
+      localStorage.removeItem('ai_quota_gist_id');
+      localStorage.removeItem('ai_quota_gh_token');
       document.getElementById('authBox').style.display = 'none';
       loadData();
     }
@@ -133,7 +173,7 @@
     async function saveData() {
       const { gistId, token } = getAuth();
       render();
-      if (!gistId || !token) return; // Im Demo-Modus nur temporär im RAM ändern
+      if (!gistId || !token) return;
 
       await fetch(`https://api.github.com/gists/${gistId}`, {
         method: 'PATCH',
@@ -144,27 +184,60 @@
       });
     }
 
-    function setQuickTime(hours) {
-      const d = new Date(Date.now() + hours * 3600000);
-      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-      document.getElementById('resetTime').value = d.toISOString().slice(0, 16);
+    function startEdit(id) {
+      const entry = items.find(i => i.id === id);
+      if (!entry) return;
+      editingId = id;
+      document.getElementById('ai').value = entry.ai;
+      document.getElementById('account').value = entry.account;
+      setDateTimeInputsFromTimestamp(entry.resetTime);
+      document.getElementById('submitBtn').textContent = "Speichern";
+      document.getElementById('cancelEditBtn').style.display = "inline-block";
+      document.getElementById('quotaForm').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    function addEntry(e) {
+    function cancelEdit() {
+      editingId = null;
+      document.getElementById('quotaForm').reset();
+      document.getElementById('submitBtn').textContent = "Hinzufügen";
+      document.getElementById('cancelEditBtn').style.display = "none";
+      setDateTimeInputsFromTimestamp(Date.now());
+    }
+
+    function submitEntry(e) {
       e.preventDefault();
-      items.push({
-        id: Date.now(),
-        ai: document.getElementById('ai').value,
-        account: document.getElementById('account').value,
-        resetTime: new Date(document.getElementById('resetTime').value).getTime()
-      });
+      const ts = parseDateTimeInputs();
+      if (ts === null) return;
+
+      const ai = document.getElementById('ai').value;
+      const account = document.getElementById('account').value.trim();
+
+      if (editingId !== null) {
+        items = items.map(i => i.id === editingId ? { ...i, ai, account, resetTime: ts } : i);
+        cancelEdit();
+      } else {
+        items.push({
+          id: Date.now(),
+          ai,
+          account,
+          resetTime: ts
+        });
+        document.getElementById('account').value = '';
+        setDateTimeInputsFromTimestamp(Date.now());
+      }
+
       saveData();
-      e.target.reset();
     }
 
     function removeEntry(id) {
+      if (editingId === id) cancelEdit();
       items = items.filter(i => i.id !== id);
       saveData();
+    }
+
+    function formatDeDateTime(ts) {
+      const d = new Date(ts);
+      return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())} Uhr`;
     }
 
     function render() {
@@ -175,11 +248,12 @@
         <div class="item">
           <div>
             <strong>${i.ai}</strong> &ndash; ${i.account}<br>
-            <small>Verfügbar ab: ${new Date(i.resetTime).toLocaleString('de-DE')}</small>
+            <small>Verfügbar ab: ${formatDeDateTime(i.resetTime)}</small>
           </div>
-          <div>
+          <div class="actions">
             <span class="countdown" data-time="${i.resetTime}">...</span>
-            <button class="del" onclick="removeEntry(${i.id})">X</button>
+            <button type="button" class="edit" onclick="startEdit(${i.id})">Bearbeiten</button>
+            <button type="button" class="del" onclick="removeEntry(${i.id})">X</button>
           </div>
         </div>
       `).join('');
@@ -194,6 +268,7 @@
           el.textContent = 'VERFÜGBAR!';
           el.classList.add('ready');
         } else {
+          el.classList.remove('ready');
           const h = Math.floor(diff / 3600000);
           const m = Math.floor((diff % 3600000) / 60000);
           const s = Math.floor((diff % 60000) / 1000);
@@ -202,6 +277,7 @@
       });
     }
 
+    setDateTimeInputsFromTimestamp(Date.now());
     setInterval(updateCountdowns, 1000);
     loadData();
   </script>
