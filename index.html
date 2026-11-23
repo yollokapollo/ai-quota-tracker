@@ -7,10 +7,11 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https://api.github.com;">
   <title>AI Quota Tracker</title>
   <style>
-    :root { --bg: #1e1e2e; --card: #313244; --input: #45475a; --text: #cdd6f4; --subtext: #a6adc8; --accent: #89b4fa; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 820px; margin: 2rem auto; padding: 0 1rem; }
+    :root { --bg: #1e1e2e; --card: #313244; --input: #45475a; --text: #cdd6f4; --subtext: #a6adc8; --accent: #89b4fa; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8; --mauve: #cba6f7; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 0.5rem; flex-wrap: wrap; }
     h1 { color: var(--accent); margin: 0; font-size: 1.5rem; }
+    h2 { color: var(--accent); margin: 0; font-size: 1.15rem; }
     .badge { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--input); display: inline-block; margin-top: 0.25rem; }
     .badge.live { background: var(--green); color: #11111b; font-weight: bold; }
     .badge.locked { background: var(--yellow); color: #11111b; font-weight: bold; }
@@ -40,6 +41,14 @@
     .countdown { font-family: monospace; font-size: 1.15rem; color: var(--green); margin-right: 0.4rem; }
     .ready { color: var(--yellow); font-weight: bold; }
     .hint { font-size: 0.85rem; opacity: 0.85; margin: 0 0 0.75rem 0; }
+    .log-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .log-entry { border-bottom: 1px solid var(--input); padding: 0.7rem 0; font-size: 0.9rem; }
+    .log-entry:last-child { border-bottom: none; }
+    .log-top { display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+    .log-action { font-weight: bold; color: var(--mauve); }
+    .log-ts { font-family: monospace; font-size: 0.8rem; color: var(--subtext); }
+    .log-detail { display: block; margin-top: 0.25rem; color: var(--text); }
+    .log-diff { display: block; margin-top: 0.2rem; font-size: 0.85rem; color: var(--yellow); }
   </style>
 </head>
 <body>
@@ -53,7 +62,7 @@
   </header>
 
   <div id="authBox" class="card" style="display:none;">
-    <p class="hint"><strong>Zero-Knowledge Cloud-Sync:</strong> Gist-ID &amp; Token bleiben lokal im Browser. Dein Tresor-Passwort wird <em>nicht</em> gespeichert und verschlüsselt alle Daten inkl. Projekte per AES-256 vor dem Upload.</p>
+    <p class="hint"><strong>Zero-Knowledge Cloud-Sync:</strong> Gist-ID &amp; Token bleiben lokal im Browser. Dein Tresor-Passwort wird <em>nicht</em> gespeichert und verschlüsselt Quotas, Projekte sowie den gesamten Verlauf per AES-256 vor dem Upload.</p>
     <div class="row">
       <input id="gistId" maxlength="100" autocomplete="off" placeholder="Privates Gist ID">
       <input id="ghToken" type="password" maxlength="200" autocomplete="off" placeholder="GitHub Token (gist)">
@@ -92,75 +101,88 @@
 
   <div id="list" class="card">Lade Einträge...</div>
 
+  <section class="card" aria-label="Verlauf und Projekt-Historie">
+    <div class="log-header">
+      <h2>Verlauf &amp; Projekt-Historie</h2>
+      <div class="row" style="margin:0;">
+        <button id="toggleHistoryBtn" class="secondary" type="button">Verlauf ausblenden</button>
+        <button id="clearHistoryBtn" class="secondary" type="button">Verlauf leeren</button>
+      </div>
+    </div>
+    <div id="historyContent">
+      <div class="row" style="margin-bottom:0.6rem;">
+        <input id="historyQuery" maxlength="120" placeholder="Verlauf durchsuchen (Projekt, Account, Aktion, KI)..." aria-label="Verlauf durchsuchen">
+      </div>
+      <div id="historyList">Noch keine Verlaufsdaten vorhanden.</div>
+    </div>
+  </section>
+
   <script>
     const AI_PROVIDERS = [
-      "Claude",
-      "ChatGPT",
-      "Gemini",
-      "DeepSeek",
-      "Perplexity",
-      "Mistral (Le Chat)",
-      "Grok",
-      "Copilot",
-      "Meta AI",
-      "Cohere",
-      "Qwen",
-      "Groq",
-      "Poe",
-      "HuggingChat",
-      "Cursor",
-      "GitHub Copilot",
-      "Windsurf",
-      "Cline / Roo Code",
-      "Continue",
-      "Sonstiges"
+      "Claude", "ChatGPT", "Gemini", "DeepSeek", "Perplexity",
+      "Mistral (Le Chat)", "Grok", "Copilot", "Meta AI", "Cohere",
+      "Qwen", "Groq", "Poe", "HuggingChat", "Cursor",
+      "GitHub Copilot", "Windsurf", "Cline / Roo Code", "Continue", "Sonstiges"
     ];
 
     const ALLOWED_AIS = new Set(AI_PROVIDERS);
+    const MAX_HISTORY = 300;
 
-    const DEMO_DATA = [
-      { id: 1, ai: "Claude", account: "max.mustermann@example.com", projects: "Arch-Dotfiles & Systemd-Units", resetTime: Date.now() + 2 * 3600000 },
-      { id: 2, ai: "Claude", account: "maria.musterfrau@example.com", projects: "Portfolio-Website & Case Studies", resetTime: Date.now() + 4.5 * 3600000 },
-      { id: 3, ai: "DeepSeek", account: "max.mustermann@example.com", projects: "Log-Parser & Testdaten-Skripte", resetTime: Date.now() - 60000 },
-      { id: 4, ai: "Cursor", account: "dev-acc-1@example.com", projects: "Frontend-Refactor & Unit-Tests", resetTime: Date.now() + 1.2 * 3600000 }
-    ];
+    const nowBase = Date.now();
+    const DEMO_DATA = {
+      items: [
+        { id: 1, ai: "Claude", account: "max.mustermann@example.com", projects: "Arch-Dotfiles & Systemd-Units", resetTime: nowBase + 2 * 3600000 },
+        { id: 2, ai: "Claude", account: "maria.musterfrau@example.com", projects: "Portfolio-Website & Case Studies", resetTime: nowBase + 4.5 * 3600000 },
+        { id: 3, ai: "DeepSeek", account: "max.mustermann@example.com", projects: "Log-Parser & Testdaten-Skripte", resetTime: nowBase - 60000 },
+        { id: 4, ai: "Cursor", account: "dev-acc-1@example.com", projects: "Frontend-Refactor & Unit-Tests", resetTime: nowBase + 1.2 * 3600000 }
+      ],
+      history: [
+        {
+          id: "h-3",
+          ts: nowBase - 1800000,
+          action: "Bearbeitet",
+          ai: "Claude",
+          account: "max.mustermann@example.com",
+          projects: "Arch-Dotfiles & Systemd-Units",
+          prevProjects: "Arch-Install & Sway-Config",
+          resetTime: nowBase + 2 * 3600000
+        },
+        {
+          id: "h-2",
+          ts: nowBase - 5400000,
+          action: "Jetzt verfügbar",
+          ai: "DeepSeek",
+          account: "max.mustermann@example.com",
+          projects: "Log-Parser & Testdaten-Skripte",
+          prevProjects: "Log-Parser & Testdaten-Skripte",
+          resetTime: nowBase - 5400000
+        },
+        {
+          id: "h-1",
+          ts: nowBase - 9000000,
+          action: "Angelegt",
+          ai: "Claude",
+          account: "maria.musterfrau@example.com",
+          projects: "Portfolio-Website & Case Studies",
+          prevProjects: "",
+          resetTime: nowBase + 4.5 * 3600000
+        }
+      ]
+    };
 
     let items = [];
+    let historyLog = [];
     let editingId = null;
     let sessionPassword = "";
     let filterAi = "ALL";
     let filterQuery = "";
+    let historyQuery = "";
+    let historyVisible = true;
 
     const getAuth = () => ({
       gistId: localStorage.getItem('ai_quota_gist_id') || '',
       token: localStorage.getItem('ai_quota_gh_token') || ''
     });
-
-    function populateAiSelects() {
-      const aiSelect = document.getElementById('ai');
-      const filterSelect = document.getElementById('filterAi');
-
-      aiSelect.replaceChildren();
-      for (const provider of AI_PROVIDERS) {
-        const opt = document.createElement('option');
-        opt.value = provider;
-        opt.textContent = provider;
-        aiSelect.appendChild(opt);
-      }
-
-      filterSelect.replaceChildren();
-      const allOpt = document.createElement('option');
-      allOpt.value = "ALL";
-      allOpt.textContent = "Alle KI-Dienste";
-      filterSelect.appendChild(allOpt);
-
-      for (const provider of AI_PROVIDERS) {
-        const opt = document.createElement('option');
-        opt.value = provider;
-        opt.textContent = provider;
-        filterSelect.appendChild(opt);
-      }
-    }
 
     function sanitizeItems(rawList) {
       if (!Array.isArray(rawList)) return [];
@@ -173,6 +195,50 @@
           projects: typeof entry.projects === "string" ? entry.projects.slice(0, 240) : "",
           resetTime: Number.isFinite(Number(entry.resetTime)) ? Number(entry.resetTime) : Date.now()
         }));
+    }
+
+    function sanitizeHistory(rawLog) {
+      if (!Array.isArray(rawLog)) return [];
+      return rawLog
+        .filter(entry => entry && typeof entry === "object")
+        .slice(0, MAX_HISTORY)
+        .map((entry, idx) => ({
+          id: typeof entry.id === "string" || typeof entry.id === "number" ? String(entry.id) : `log-${Date.now()}-${idx}`,
+          ts: Number.isFinite(Number(entry.ts)) ? Number(entry.ts) : Date.now(),
+          action: typeof entry.action === "string" ? entry.action.slice(0, 40) : "Aktion",
+          ai: ALLOWED_AIS.has(entry.ai) ? entry.ai : "Sonstiges",
+          account: typeof entry.account === "string" ? entry.account.slice(0, 120) : "",
+          projects: typeof entry.projects === "string" ? entry.projects.slice(0, 240) : "",
+          prevProjects: typeof entry.prevProjects === "string" ? entry.prevProjects.slice(0, 240) : "",
+          resetTime: Number.isFinite(Number(entry.resetTime)) ? Number(entry.resetTime) : Date.now()
+        }));
+    }
+
+    function normalizeVaultState(decoded) {
+      if (Array.isArray(decoded)) {
+        return { items: sanitizeItems(decoded), history: [] };
+      }
+      if (decoded && typeof decoded === "object") {
+        return {
+          items: sanitizeItems(decoded.items),
+          history: sanitizeHistory(decoded.history)
+        };
+      }
+      return { items: [], history: [] };
+    }
+
+    function appendHistory(action, entry, prevProjects = "") {
+      const logEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        ts: Date.now(),
+        action: String(action).slice(0, 40),
+        ai: ALLOWED_AIS.has(entry.ai) ? entry.ai : "Sonstiges",
+        account: String(entry.account || "").slice(0, 120),
+        projects: String(entry.projects || "").slice(0, 240),
+        prevProjects: String(prevProjects || "").slice(0, 240),
+        resetTime: Number.isFinite(Number(entry.resetTime)) ? Number(entry.resetTime) : Date.now()
+      };
+      historyLog = [logEntry, ...historyLog].slice(0, MAX_HISTORY);
     }
 
     // --- Web Crypto API (PBKDF2 + AES-GCM 256-Bit) ---
@@ -198,7 +264,7 @@
       const encoded = new TextEncoder().encode(JSON.stringify(dataObj));
       const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
       return JSON.stringify({
-        v: 1,
+        v: 2,
         alg: "AES-GCM-256",
         salt: b64Encode(salt),
         iv: b64Encode(iv),
@@ -208,7 +274,9 @@
 
     async function decryptPayload(rawText, password) {
       const parsed = JSON.parse(rawText);
-      if (Array.isArray(parsed)) return sanitizeItems(parsed);
+      if (Array.isArray(parsed) || (parsed && typeof parsed === "object" && !parsed.ct)) {
+        return normalizeVaultState(parsed);
+      }
       if (!parsed.ct || !parsed.salt || !parsed.iv) throw new Error("Unbekanntes Datenformat");
       const key = await deriveKey(password, b64Decode(parsed.salt));
       const plainBuf = await crypto.subtle.decrypt(
@@ -216,7 +284,7 @@
         key,
         b64Decode(parsed.ct)
       );
-      return sanitizeItems(JSON.parse(new TextDecoder().decode(plainBuf)));
+      return normalizeVaultState(JSON.parse(new TextDecoder().decode(plainBuf)));
     }
 
     // --- Datum & Zeit ---
@@ -243,6 +311,38 @@
     function formatDeDateTime(ts) {
       const d = new Date(ts);
       return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())} Uhr`;
+    }
+
+    function formatDeDateTimeSec(ts) {
+      const d = new Date(ts);
+      return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    }
+
+    // --- Dropdowns ---
+    function populateAiSelects() {
+      const aiSelect = document.getElementById('ai');
+      const filterSelect = document.getElementById('filterAi');
+
+      aiSelect.replaceChildren();
+      for (const provider of AI_PROVIDERS) {
+        const opt = document.createElement('option');
+        opt.value = provider;
+        opt.textContent = provider;
+        aiSelect.appendChild(opt);
+      }
+
+      filterSelect.replaceChildren();
+      const allOpt = document.createElement('option');
+      allOpt.value = "ALL";
+      allOpt.textContent = "Alle KI-Dienste";
+      filterSelect.appendChild(allOpt);
+
+      for (const provider of AI_PROVIDERS) {
+        const opt = document.createElement('option');
+        opt.value = provider;
+        opt.textContent = provider;
+        filterSelect.appendChild(opt);
+      }
     }
 
     // --- Auth & Sync ---
@@ -287,8 +387,10 @@
       if (!gistId || !token) {
         badge.textContent = "Demo-Modus (Öffentlich)";
         badge.className = "badge";
-        items = sanitizeItems(JSON.parse(JSON.stringify(DEMO_DATA)));
-        render();
+        const demoClone = JSON.parse(JSON.stringify(DEMO_DATA));
+        items = sanitizeItems(demoClone.items);
+        historyLog = sanitizeHistory(demoClone.history);
+        renderAll();
         return;
       }
 
@@ -296,7 +398,8 @@
         badge.textContent = "Tresor gesperrt (Passwort eingeben)";
         badge.className = "badge locked";
         items = [];
-        render("Bitte oben auf 'Login / Tresor' klicken und dein Tresor-Passwort eingeben.");
+        historyLog = [];
+        renderAll("Bitte oben auf 'Login / Tresor' klicken und dein Tresor-Passwort eingeben.");
         toggleAuth(true);
         return;
       }
@@ -308,10 +411,12 @@
         if (!res.ok) throw new Error("Gist nicht erreichbar");
         const gist = await res.json();
         const file = gist.files && gist.files['limits.json'];
-        items = file ? await decryptPayload(file.content, sessionPassword) : [];
+        const state = file ? await decryptPayload(file.content, sessionPassword) : { items: [], history: [] };
+        items = state.items;
+        historyLog = state.history;
         badge.textContent = "Verschlüsselt (AES-256 Sync)";
         badge.className = "badge live";
-        render();
+        renderAll();
       } catch (err) {
         sessionPassword = "";
         badge.textContent = "Entschlüsselung fehlgeschlagen";
@@ -323,11 +428,12 @@
 
     async function saveData() {
       const { gistId, token } = getAuth();
-      render();
+      renderAll();
       if (!gistId || !token || !sessionPassword) return;
 
       try {
-        const encryptedContent = await encryptPayload(items, sessionPassword);
+        const payload = { items, history: historyLog.slice(0, MAX_HISTORY) };
+        const encryptedContent = await encryptPayload(payload, sessionPassword);
         const res = await fetch(`https://api.github.com/gists/${encodeURIComponent(gistId)}`, {
           method: 'PATCH',
           headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
@@ -354,18 +460,37 @@
         .sort((a, b) => a.resetTime - b.resetTime);
     }
 
+    function getFilteredHistory() {
+      const q = historyQuery.trim().toLowerCase();
+      return historyLog
+        .filter(h => {
+          if (!q) return true;
+          const haystack = `${h.action || ""} ${h.ai || ""} ${h.account || ""} ${h.projects || ""} ${h.prevProjects || ""}`.toLowerCase();
+          return haystack.includes(q);
+        })
+        .sort((a, b) => b.ts - a.ts);
+    }
+
     function resetFilters() {
       filterAi = "ALL";
       filterQuery = "";
       document.getElementById('filterAi').value = "ALL";
       document.getElementById('filterQuery').value = "";
-      render();
+      renderList();
     }
 
-    // --- CRUD & Sicheres DOM-Rendering (XSS-frei) ---
+    // --- CRUD & Verlauf ---
     function setAvailableNow(id) {
       const nowTs = Date.now();
-      items = items.map(i => i.id === id ? { ...i, resetTime: nowTs } : i);
+      let target = null;
+      items = items.map(i => {
+        if (i.id !== id) return i;
+        target = { ...i, resetTime: nowTs };
+        return target;
+      });
+      if (target) {
+        appendHistory("Jetzt verfügbar", target, target.projects);
+      }
       if (editingId === id) {
         setDateTimeInputsFromTimestamp(nowTs);
       }
@@ -403,10 +528,16 @@
       const projects = document.getElementById('projects').value.trim().slice(0, 240);
 
       if (editingId !== null) {
-        items = items.map(i => i.id === editingId ? { ...i, ai, account, projects, resetTime: ts } : i);
+        const oldEntry = items.find(i => i.id === editingId);
+        const prevProjects = oldEntry ? (oldEntry.projects || "") : "";
+        const updated = { id: editingId, ai, account, projects, resetTime: ts };
+        items = items.map(i => i.id === editingId ? { ...i, ...updated } : i);
+        appendHistory("Bearbeitet", updated, prevProjects);
         cancelEdit();
       } else {
-        items.push({ id: Date.now(), ai, account, projects, resetTime: ts });
+        const created = { id: Date.now(), ai, account, projects, resetTime: ts };
+        items.push(created);
+        appendHistory("Angelegt", created, "");
         document.getElementById('account').value = '';
         document.getElementById('projects').value = '';
         setDateTimeInputsFromTimestamp(Date.now());
@@ -415,12 +546,24 @@
     }
 
     function removeEntry(id) {
+      const removed = items.find(i => i.id === id);
       if (editingId === id) cancelEdit();
       items = items.filter(i => i.id !== id);
+      if (removed) {
+        appendHistory("Gelöscht", removed, removed.projects || "");
+      }
       saveData();
     }
 
-    function render(emptyMessage = 'Keine passenden Einträge vorhanden.') {
+    function clearHistory() {
+      if (!historyLog.length) return;
+      if (!confirm("Verlauf und Projekt-Historie wirklich unwiderruflich leeren?")) return;
+      historyLog = [];
+      saveData();
+    }
+
+    // --- Sicheres DOM-Rendering (XSS-frei) ---
+    function renderList(emptyMessage = 'Keine passenden Einträge vorhanden.') {
       const list = document.getElementById('list');
       list.replaceChildren();
 
@@ -485,6 +628,57 @@
       updateCountdowns();
     }
 
+    function renderHistory() {
+      const container = document.getElementById('historyList');
+      container.replaceChildren();
+
+      const entries = getFilteredHistory();
+      if (!entries.length) {
+        container.textContent = historyQuery.trim()
+          ? 'Keine passenden Verlaufs-Einträge gefunden.'
+          : 'Noch keine Verlaufsdaten vorhanden.';
+        return;
+      }
+
+      for (const h of entries) {
+        const box = document.createElement('div');
+        box.className = 'log-entry';
+
+        const top = document.createElement('div');
+        top.className = 'log-top';
+
+        const act = document.createElement('span');
+        act.className = 'log-action';
+        act.textContent = `${h.action} · ${h.ai} (${h.account || "ohne Account"})`;
+
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'log-ts';
+        tsSpan.textContent = formatDeDateTimeSec(h.ts);
+
+        top.append(act, tsSpan);
+        box.appendChild(top);
+
+        const detail = document.createElement('span');
+        detail.className = 'log-detail';
+        detail.textContent = `Projekte: ${h.projects || "–"} | Reset-Zeit: ${formatDeDateTime(h.resetTime)}`;
+        box.appendChild(detail);
+
+        if (h.action === "Bearbeitet" && h.prevProjects !== h.projects) {
+          const diff = document.createElement('span');
+          diff.className = 'log-diff';
+          diff.textContent = `Projekt-Änderung: "${h.prevProjects || "–"}" → "${h.projects || "–"}"`;
+          box.appendChild(diff);
+        }
+
+        container.appendChild(box);
+      }
+    }
+
+    function renderAll(emptyMessage) {
+      renderList(emptyMessage);
+      renderHistory();
+    }
+
     function updateCountdowns() {
       const now = Date.now();
       document.querySelectorAll('.countdown').forEach(el => {
@@ -510,13 +704,23 @@
     document.getElementById('cancelEditBtn').addEventListener('click', cancelEdit);
     document.getElementById('filterAi').addEventListener('change', e => {
       filterAi = ALLOWED_AIS.has(e.target.value) ? e.target.value : "ALL";
-      render();
+      renderList();
     });
     document.getElementById('filterQuery').addEventListener('input', e => {
       filterQuery = String(e.target.value || "").slice(0, 120);
-      render();
+      renderList();
     });
     document.getElementById('resetFilterBtn').addEventListener('click', resetFilters);
+    document.getElementById('historyQuery').addEventListener('input', e => {
+      historyQuery = String(e.target.value || "").slice(0, 120);
+      renderHistory();
+    });
+    document.getElementById('toggleHistoryBtn').addEventListener('click', () => {
+      historyVisible = !historyVisible;
+      document.getElementById('historyContent').style.display = historyVisible ? 'block' : 'none';
+      document.getElementById('toggleHistoryBtn').textContent = historyVisible ? 'Verlauf ausblenden' : 'Verlauf anzeigen';
+    });
+    document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
     document.querySelectorAll('.quick-btns button').forEach(btn => {
       btn.addEventListener('click', () => setDateTimeInputsFromTimestamp(Date.now() + Number(btn.dataset.hours) * 3600000));
     });
