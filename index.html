@@ -19,10 +19,11 @@
     .row + .row { margin-top: 0.5rem; }
     input, select, button { padding: 0.6rem; border-radius: 6px; border: none; background: var(--input); color: #fff; font-size: 0.95rem; }
     input, select { flex: 1; min-width: 130px; }
+    select.ai-select { max-width: 210px; }
     input.projects-input { flex: 2; min-width: 220px; }
     input.time-24 { max-width: 115px; min-width: 95px; font-family: monospace; text-align: center; }
     input.date-iso { max-width: 165px; min-width: 145px; font-family: monospace; }
-    select.filter-select { max-width: 180px; }
+    select.filter-select { max-width: 220px; }
     button { background: var(--accent); color: #11111b; font-weight: bold; cursor: pointer; }
     button.secondary { background: var(--input); color: var(--text); }
     button.edit { background: var(--yellow); color: #11111b; padding: 0.35rem 0.65rem; font-size: 0.85rem; }
@@ -63,12 +64,7 @@
 
   <form id="quotaForm">
     <div class="row">
-      <select id="ai">
-        <option>Claude</option>
-        <option>ChatGPT</option>
-        <option>Gemini</option>
-        <option>DeepSeek</option>
-      </select>
+      <select id="ai" class="ai-select" aria-label="KI-Dienst auswählen"></select>
       <input id="account" maxlength="120" placeholder="Account / E-Mail" required>
       <input id="resetDate" class="date-iso" type="date" required>
       <input id="resetTime24" class="time-24" type="text" inputmode="numeric" pattern="^([01]\d|2[0-3]):[0-5]\d$" placeholder="HH:MM" title="24-Stunden-Format HH:MM, z. B. 22:30" required>
@@ -87,13 +83,7 @@
 
   <div class="filter-bar">
     <div class="row">
-      <select id="filterAi" class="filter-select" aria-label="Nach KI-Dienst filtern">
-        <option value="ALL">Alle KI-Dienste</option>
-        <option value="Claude">Claude</option>
-        <option value="ChatGPT">ChatGPT</option>
-        <option value="Gemini">Gemini</option>
-        <option value="DeepSeek">DeepSeek</option>
-      </select>
+      <select id="filterAi" class="filter-select" aria-label="Nach KI-Dienst filtern"></select>
       <input id="filterQuery" maxlength="120" placeholder="Suche nach Projekt oder Account..." aria-label="Suche nach Projekt oder Account">
       <button id="resetFilterBtn" class="secondary" type="button">Filter zurücksetzen</button>
     </div>
@@ -102,12 +92,36 @@
   <div id="list" class="card">Lade Einträge...</div>
 
   <script>
-    const ALLOWED_AIS = new Set(["Claude", "ChatGPT", "Gemini", "DeepSeek"]);
+    const AI_PROVIDERS = [
+      "Claude",
+      "ChatGPT",
+      "Gemini",
+      "DeepSeek",
+      "Perplexity",
+      "Mistral (Le Chat)",
+      "Grok",
+      "Copilot",
+      "Meta AI",
+      "Cohere",
+      "Qwen",
+      "Groq",
+      "Poe",
+      "HuggingChat",
+      "Cursor",
+      "GitHub Copilot",
+      "Windsurf",
+      "Cline / Roo Code",
+      "Continue",
+      "Sonstiges"
+    ];
+
+    const ALLOWED_AIS = new Set(AI_PROVIDERS);
 
     const DEMO_DATA = [
       { id: 1, ai: "Claude", account: "max.mustermann@example.com", projects: "Arch-Dotfiles & Systemd-Units", resetTime: Date.now() + 2 * 3600000 },
       { id: 2, ai: "Claude", account: "maria.musterfrau@example.com", projects: "Portfolio-Website & Case Studies", resetTime: Date.now() + 4.5 * 3600000 },
-      { id: 3, ai: "DeepSeek", account: "max.mustermann@example.com", projects: "Log-Parser & Testdaten-Skripte", resetTime: Date.now() - 60000 }
+      { id: 3, ai: "DeepSeek", account: "max.mustermann@example.com", projects: "Log-Parser & Testdaten-Skripte", resetTime: Date.now() - 60000 },
+      { id: 4, ai: "Cursor", account: "dev-acc-1@example.com", projects: "Frontend-Refactor & Unit-Tests", resetTime: Date.now() + 1.2 * 3600000 }
     ];
 
     let items = [];
@@ -121,13 +135,39 @@
       token: localStorage.getItem('ai_quota_gh_token') || ''
     });
 
+    function populateAiSelects() {
+      const aiSelect = document.getElementById('ai');
+      const filterSelect = document.getElementById('filterAi');
+
+      aiSelect.replaceChildren();
+      for (const provider of AI_PROVIDERS) {
+        const opt = document.createElement('option');
+        opt.value = provider;
+        opt.textContent = provider;
+        aiSelect.appendChild(opt);
+      }
+
+      filterSelect.replaceChildren();
+      const allOpt = document.createElement('option');
+      allOpt.value = "ALL";
+      allOpt.textContent = "Alle KI-Dienste";
+      filterSelect.appendChild(allOpt);
+
+      for (const provider of AI_PROVIDERS) {
+        const opt = document.createElement('option');
+        opt.value = provider;
+        opt.textContent = provider;
+        filterSelect.appendChild(opt);
+      }
+    }
+
     function sanitizeItems(rawList) {
       if (!Array.isArray(rawList)) return [];
       return rawList
         .filter(entry => entry && typeof entry === "object")
         .map((entry, idx) => ({
           id: typeof entry.id === "number" || typeof entry.id === "string" ? entry.id : `${Date.now()}-${idx}`,
-          ai: ALLOWED_AIS.has(entry.ai) ? entry.ai : "Claude",
+          ai: ALLOWED_AIS.has(entry.ai) ? entry.ai : "Sonstiges",
           account: typeof entry.account === "string" ? entry.account.slice(0, 120) : "",
           projects: typeof entry.projects === "string" ? entry.projects.slice(0, 240) : "",
           resetTime: Number.isFinite(Number(entry.resetTime)) ? Number(entry.resetTime) : Date.now()
@@ -307,7 +347,7 @@
         .filter(i => {
           if (filterAi !== "ALL" && i.ai !== filterAi) return false;
           if (!q) return true;
-          const haystack = `${i.projects || ""} ${i.account || ""}`.toLowerCase();
+          const haystack = `${i.projects || ""} ${i.account || ""} ${i.ai || ""}`.toLowerCase();
           return haystack.includes(q);
         })
         .sort((a, b) => a.resetTime - b.resetTime);
@@ -326,7 +366,7 @@
       const entry = items.find(i => i.id === id);
       if (!entry) return;
       editingId = id;
-      document.getElementById('ai').value = ALLOWED_AIS.has(entry.ai) ? entry.ai : "Claude";
+      document.getElementById('ai').value = ALLOWED_AIS.has(entry.ai) ? entry.ai : "Sonstiges";
       document.getElementById('account').value = entry.account || "";
       document.getElementById('projects').value = entry.projects || "";
       setDateTimeInputsFromTimestamp(entry.resetTime);
@@ -348,7 +388,7 @@
       if (ts === null) return;
 
       const rawAi = document.getElementById('ai').value;
-      const ai = ALLOWED_AIS.has(rawAi) ? rawAi : "Claude";
+      const ai = ALLOWED_AIS.has(rawAi) ? rawAi : "Sonstiges";
       const account = document.getElementById('account').value.trim().slice(0, 120);
       const projects = document.getElementById('projects').value.trim().slice(0, 240);
 
@@ -446,6 +486,7 @@
       });
     }
 
+    populateAiSelects();
     document.getElementById('authToggleBtn').addEventListener('click', () => toggleAuth());
     document.getElementById('connectBtn').addEventListener('click', saveAuth);
     document.getElementById('logoutBtn').addEventListener('click', logout);
