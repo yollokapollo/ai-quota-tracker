@@ -33,8 +33,16 @@ Um die Anwendung vom regulären Browser-Profil und dessen Erweiterungen zu isoli
 [Desktop Entry]
 Name=AI Quota Tracker
 Comment=Verschlüsselter AI Kontingent-Tracker
-Exec=brave --user-data-dir=%h/.local/share/ai-quota-profile --app=https://<DEIN-GITHUB-NAME>.github.io/ai-quota-tracker/ --class=ai-quota-tracker
+Exec=brave --user-data-dir=%h/.local/share/ai-quota-profile --app=https://yollokapollo.github.io/ai-quota-tracker/ --class=ai-quota-tracker
 Terminal=false
 Type=Application
 Categories=Utility;
 StartupWMClass=ai-quota-tracker
+
+```
+
+## Tech Stack
+
+* **Frontend:** Vanilla HTML5, CSS3 (Custom Properties / Dark Theme), ES6+ JavaScript
+* **Kryptografie:** Web Crypto API (`SubtleCrypto` – `PBKDF2`, `SHA-256`, `AES-GCM`)
+* **Storage & API:** GitHub Gists REST API, Browser `localStorage` (nur für Token/Gist-ID)
