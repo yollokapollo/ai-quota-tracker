@@ -3,14 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https://api.github.com;">
   <title>AI Quota Tracker</title>
   <style>
     :root { --bg: #1e1e2e; --card: #313244; --input: #45475a; --text: #cdd6f4; --accent: #89b4fa; --green: #a6e3a1; --yellow: #f9e2af; --red: #f38ba8; }
     body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 0.5rem; flex-wrap: wrap; }
     h1 { color: var(--accent); margin: 0; font-size: 1.5rem; }
-    .badge { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--input); }
+    .badge { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--input); display: inline-block; margin-top: 0.25rem; }
     .badge.live { background: var(--green); color: #11111b; font-weight: bold; }
+    .badge.locked { background: var(--yellow); color: #11111b; font-weight: bold; }
     .card, form { background: var(--card); padding: 1rem; border-radius: 10px; margin-bottom: 1rem; }
     .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
     input, select, button { padding: 0.6rem; border-radius: 6px; border: none; background: var(--input); color: #fff; font-size: 0.95rem; }
@@ -28,6 +30,7 @@
     .actions { display: flex; align-items: center; gap: 0.25rem; }
     .countdown { font-family: monospace; font-size: 1.15rem; color: var(--green); margin-right: 0.5rem; }
     .ready { color: var(--yellow); font-weight: bold; }
+    .hint { font-size: 0.85rem; opacity: 0.85; margin: 0 0 0.75rem 0; }
   </style>
 </head>
 <body>
@@ -37,20 +40,21 @@
       <h1>AI Quota Tracker</h1>
       <span id="modeBadge" class="badge">Demo-Modus (Öffentlich)</span>
     </div>
-    <button class="secondary" onclick="toggleAuth()">Login / Config</button>
+    <button id="authToggleBtn" class="secondary" type="button">Login / Tresor</button>
   </header>
 
   <div id="authBox" class="card" style="display:none;">
-    <p style="margin-top:0; font-size:0.9rem;">Verbinde dein privates GitHub Gist für deine echten E-Mail-Accounts (wird nur lokal im Browser gespeichert):</p>
+    <p class="hint"><strong>Zero-Knowledge Cloud-Sync:</strong> Gist-ID &amp; Token bleiben lokal im Browser. Dein Tresor-Passwort wird <em>nicht</em> gespeichert und verschlüsselt alle Daten per AES-256 vor dem Upload.</p>
     <div class="row">
       <input id="gistId" placeholder="Privates Gist ID">
-      <input id="ghToken" type="password" placeholder="GitHub Token (Gist-Berechtigung)">
-      <button onclick="saveAuth()">Verbinden</button>
-      <button class="secondary" onclick="logout()">Logout</button>
+      <input id="ghToken" type="password" placeholder="GitHub Token (gist)">
+      <input id="vaultPass" type="password" placeholder="Tresor-Passwort (AES-256)">
+      <button id="connectBtn" type="button">Entsperren &amp; Verbinden</button>
+      <button id="logoutBtn" class="secondary" type="button">Trennen</button>
     </div>
   </div>
 
-  <form id="quotaForm" onsubmit="submitEntry(event)">
+  <form id="quotaForm">
     <div class="row">
       <select id="ai">
         <option>Claude</option>
@@ -60,14 +64,14 @@
       </select>
       <input id="account" placeholder="Account / E-Mail" required>
       <input id="resetDate" class="date-iso" type="date" required>
-      <input id="resetTime24" class="time-24" type="text" inputmode="numeric" pattern="^([01]\d|2[0-3]):[0-5]\d$" placeholder="HH:MM (z.B. 22:30)" title="24-Stunden-Format HH:MM, z. B. 22:30" required>
+      <input id="resetTime24" class="time-24" type="text" inputmode="numeric" pattern="^([01]\d|2[0-3]):[0-5]\d$" placeholder="HH:MM" title="24-Stunden-Format HH:MM, z. B. 22:30" required>
       <button id="submitBtn" type="submit">Hinzufügen</button>
-      <button id="cancelEditBtn" type="button" class="secondary" style="display:none;" onclick="cancelEdit()">Abbrechen</button>
+      <button id="cancelEditBtn" type="button" class="secondary" style="display:none;">Abbrechen</button>
     </div>
     <div class="quick-btns">
-      <button type="button" onclick="setQuickTime(3)">+3 Std</button>
-      <button type="button" onclick="setQuickTime(5)">+5 Std</button>
-      <button type="button" onclick="setQuickTime(24)">+24 Std</button>
+      <button type="button" data-hours="3">+3 Std</button>
+      <button type="button" data-hours="5">+5 Std</button>
+      <button type="button" data-hours="24">+24 Std</button>
     </div>
   </form>
 
@@ -82,25 +86,64 @@
 
     let items = [];
     let editingId = null;
+    let sessionPassword = ""; // Bleibt nur im RAM!
 
     const getAuth = () => ({
-      gistId: localStorage.getItem('ai_quota_gist_id'),
-      token: localStorage.getItem('ai_quota_gh_token')
+      gistId: localStorage.getItem('ai_quota_gist_id') || '',
+      token: localStorage.getItem('ai_quota_gh_token') || ''
     });
 
-    function pad2(n) {
-      return String(n).padStart(2, '0');
+    // --- Web Crypto API (PBKDF2 + AES-GCM 256-Bit) ---
+    const b64Encode = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const b64Decode = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+
+    async function deriveKey(password, salt) {
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 250000, hash: "SHA-256" },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
     }
+
+    async function encryptPayload(dataObj, password) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await deriveKey(password, salt);
+      const encoded = new TextEncoder().encode(JSON.stringify(dataObj));
+      const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+      return JSON.stringify({
+        v: 1,
+        alg: "AES-GCM-256",
+        salt: b64Encode(salt),
+        iv: b64Encode(iv),
+        ct: b64Encode(cipher)
+      }, null, 2);
+    }
+
+    async function decryptPayload(rawText, password) {
+      const parsed = JSON.parse(rawText);
+      if (Array.isArray(parsed)) return parsed; // Fallback für initiales leeres "[]"
+      if (!parsed.ct || !parsed.salt || !parsed.iv) throw new Error("Unbekanntes Datenformat");
+      const key = await deriveKey(password, b64Decode(parsed.salt));
+      const plainBuf = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: b64Decode(parsed.iv) },
+        key,
+        b64Decode(parsed.ct)
+      );
+      return JSON.parse(new TextDecoder().decode(plainBuf));
+    }
+
+    // --- Datum & Zeit ---
+    const pad2 = n => String(n).padStart(2, '0');
 
     function setDateTimeInputsFromTimestamp(ts) {
       const d = new Date(ts);
-      const yyyy = d.getFullYear();
-      const mm = pad2(d.getMonth() + 1);
-      const dd = pad2(d.getDate());
-      const hh = pad2(d.getHours());
-      const min = pad2(d.getMinutes());
-      document.getElementById('resetDate').value = `${yyyy}-${mm}-${dd}`;
-      document.getElementById('resetTime24').value = `${hh}:${min}`;
+      document.getElementById('resetDate').value = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+      document.getElementById('resetTime24').value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
 
     function parseDateTimeInputs() {
@@ -112,25 +155,36 @@
         return null;
       }
       const [y, m, d] = dateStr.split('-').map(Number);
-      const hh = Number(match[1]);
-      const min = Number(match[2]);
-      return new Date(y, m - 1, d, hh, min, 0, 0).getTime();
+      return new Date(y, m - 1, d, Number(match[1]), Number(match[2]), 0, 0).getTime();
     }
 
-    function setQuickTime(hours) {
-      setDateTimeInputsFromTimestamp(Date.now() + hours * 3600000);
+    function formatDeDateTime(ts) {
+      const d = new Date(ts);
+      return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())} Uhr`;
     }
 
-    function toggleAuth() {
+    // --- Auth & Sync ---
+    function toggleAuth(forceOpen = null) {
       const box = document.getElementById('authBox');
-      box.style.display = box.style.display === 'none' ? 'block' : 'none';
-      document.getElementById('gistId').value = getAuth().gistId || '';
-      document.getElementById('ghToken').value = getAuth().token || '';
+      const show = forceOpen !== null ? forceOpen : box.style.display === 'none';
+      box.style.display = show ? 'block' : 'none';
+      document.getElementById('gistId').value = getAuth().gistId;
+      document.getElementById('ghToken').value = getAuth().token;
+      if (show) document.getElementById('vaultPass').focus();
     }
 
     function saveAuth() {
-      localStorage.setItem('ai_quota_gist_id', document.getElementById('gistId').value.trim());
-      localStorage.setItem('ai_quota_gh_token', document.getElementById('ghToken').value.trim());
+      const gistId = document.getElementById('gistId').value.trim();
+      const token = document.getElementById('ghToken').value.trim();
+      const pass = document.getElementById('vaultPass').value;
+      if (!gistId || !token || !pass) {
+        alert("Bitte Gist-ID, Token und Tresor-Passwort ausfüllen.");
+        return;
+      }
+      localStorage.setItem('ai_quota_gist_id', gistId);
+      localStorage.setItem('ai_quota_gh_token', token);
+      sessionPassword = pass;
+      document.getElementById('vaultPass').value = '';
       document.getElementById('authBox').style.display = 'none';
       loadData();
     }
@@ -138,6 +192,8 @@
     function logout() {
       localStorage.removeItem('ai_quota_gist_id');
       localStorage.removeItem('ai_quota_gh_token');
+      sessionPassword = "";
+      document.getElementById('vaultPass').value = '';
       document.getElementById('authBox').style.display = 'none';
       loadData();
     }
@@ -148,9 +204,18 @@
 
       if (!gistId || !token) {
         badge.textContent = "Demo-Modus (Öffentlich)";
-        badge.classList.remove('live');
+        badge.className = "badge";
         items = JSON.parse(JSON.stringify(DEMO_DATA));
         render();
+        return;
+      }
+
+      if (!sessionPassword) {
+        badge.textContent = "Tresor gesperrt (Passwort eingeben)";
+        badge.className = "badge locked";
+        items = [];
+        render("Bitte oben auf 'Login / Tresor' klicken und dein Tresor-Passwort eingeben.");
+        toggleAuth(true);
         return;
       }
 
@@ -161,29 +226,35 @@
         if (!res.ok) throw new Error("Gist nicht erreichbar");
         const gist = await res.json();
         const file = gist.files['limits.json'];
-        items = file ? JSON.parse(file.content) : [];
-        badge.textContent = "Privat-Modus (Cloud Sync)";
-        badge.classList.add('live');
+        items = file ? await decryptPayload(file.content, sessionPassword) : [];
+        badge.textContent = "Verschlüsselt (AES-256 Sync)";
+        badge.className = "badge live";
         render();
       } catch (err) {
-        alert("Fehler beim Laden deines privaten Gists. Prüfe Token und Gist-ID.");
+        sessionPassword = "";
+        badge.textContent = "Entschlüsselung fehlgeschlagen";
+        badge.className = "badge locked";
+        alert("Konnte Tresor nicht entschlüsseln. Falsches Passwort, falscher Token oder ungültige Gist-ID.");
+        toggleAuth(true);
       }
     }
 
     async function saveData() {
       const { gistId, token } = getAuth();
       render();
-      if (!gistId || !token) return;
+      if (!gistId || !token || !sessionPassword) return;
 
+      const encryptedContent = await encryptPayload(items, sessionPassword);
       await fetch(`https://api.github.com/gists/${gistId}`, {
         method: 'PATCH',
         headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          files: { 'limits.json': { content: JSON.stringify(items, null, 2) } }
+          files: { 'limits.json': { content: encryptedContent } }
         })
       });
     }
 
+    // --- CRUD & Sicheres DOM-Rendering (XSS-frei) ---
     function startEdit(id) {
       const entry = items.find(i => i.id === id);
       if (!entry) return;
@@ -193,7 +264,6 @@
       setDateTimeInputsFromTimestamp(entry.resetTime);
       document.getElementById('submitBtn').textContent = "Speichern";
       document.getElementById('cancelEditBtn').style.display = "inline-block";
-      document.getElementById('quotaForm').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function cancelEdit() {
@@ -216,16 +286,10 @@
         items = items.map(i => i.id === editingId ? { ...i, ai, account, resetTime: ts } : i);
         cancelEdit();
       } else {
-        items.push({
-          id: Date.now(),
-          ai,
-          account,
-          resetTime: ts
-        });
+        items.push({ id: Date.now(), ai, account, resetTime: ts });
         document.getElementById('account').value = '';
         setDateTimeInputsFromTimestamp(Date.now());
       }
-
       saveData();
     }
 
@@ -235,35 +299,63 @@
       saveData();
     }
 
-    function formatDeDateTime(ts) {
-      const d = new Date(ts);
-      return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())} Uhr`;
-    }
-
-    function render() {
+    function render(emptyMessage = 'Keine Einträge vorhanden.') {
       const list = document.getElementById('list');
-      if (!items.length) { list.innerHTML = 'Keine Einträge vorhanden.'; return; }
+      list.replaceChildren();
+
+      if (!items.length) {
+        list.textContent = emptyMessage;
+        return;
+      }
+
       items.sort((a, b) => a.resetTime - b.resetTime);
-      list.innerHTML = items.map(i => `
-        <div class="item">
-          <div>
-            <strong>${i.ai}</strong> &ndash; ${i.account}<br>
-            <small>Verfügbar ab: ${formatDeDateTime(i.resetTime)}</small>
-          </div>
-          <div class="actions">
-            <span class="countdown" data-time="${i.resetTime}">...</span>
-            <button type="button" class="edit" onclick="startEdit(${i.id})">Bearbeiten</button>
-            <button type="button" class="del" onclick="removeEntry(${i.id})">X</button>
-          </div>
-        </div>
-      `).join('');
+
+      for (const i of items) {
+        const row = document.createElement('div');
+        row.className = 'item';
+
+        const info = document.createElement('div');
+        const strong = document.createElement('strong');
+        strong.textContent = i.ai;
+        info.appendChild(strong);
+        info.appendChild(document.createTextNode(` – ${i.account}`));
+        info.appendChild(document.createElement('br'));
+
+        const small = document.createElement('small');
+        small.textContent = `Verfügbar ab: ${formatDeDateTime(i.resetTime)}`;
+        info.appendChild(small);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const cd = document.createElement('span');
+        cd.className = 'countdown';
+        cd.dataset.time = String(i.resetTime);
+        cd.textContent = '...';
+
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'edit';
+        editBtn.textContent = 'Bearbeiten';
+        editBtn.addEventListener('click', () => startEdit(i.id));
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'del';
+        delBtn.textContent = 'X';
+        delBtn.addEventListener('click', () => removeEntry(i.id));
+
+        actions.append(cd, editBtn, delBtn);
+        row.append(info, actions);
+        list.appendChild(row);
+      }
       updateCountdowns();
     }
 
     function updateCountdowns() {
       const now = Date.now();
       document.querySelectorAll('.countdown').forEach(el => {
-        const diff = parseInt(el.dataset.time) - now;
+        const diff = parseInt(el.dataset.time, 10) - now;
         if (diff <= 0) {
           el.textContent = 'VERFÜGBAR!';
           el.classList.add('ready');
@@ -276,6 +368,16 @@
         }
       });
     }
+
+    // Event-Listener binden
+    document.getElementById('authToggleBtn').addEventListener('click', () => toggleAuth());
+    document.getElementById('connectBtn').addEventListener('click', saveAuth);
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('quotaForm').addEventListener('submit', submitEntry);
+    document.getElementById('cancelEditBtn').addEventListener('click', cancelEdit);
+    document.querySelectorAll('.quick-btns button').forEach(btn => {
+      btn.addEventListener('click', () => setDateTimeInputsFromTimestamp(Date.now() + Number(btn.dataset.hours) * 3600000));
+    });
 
     setDateTimeInputsFromTimestamp(Date.now());
     setInterval(updateCountdowns, 1000);
