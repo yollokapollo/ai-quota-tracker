@@ -35,7 +35,7 @@ Um die Anwendung vom regulären Browser-Profil und dessen Erweiterungen zu isoli
 [Desktop Entry]
 Name=AI Quota Tracker
 Comment=Verschlüsselter AI Kontingent-Tracker
-Exec=brave --user-data-dir=%h/.local/share/ai-quota-profile --app=https://<DEIN-GITHUB-NAME>.github.io/ai-quota-tracker/ --class=ai-quota-tracker
+Exec=brave --user-data-dir=%h/.local/share/ai-quota-profile --app=https://yollokapollo.github.io/ai-quota-tracker/ --class=ai-quota-tracker
 Terminal=false
 Type=Application
 Categories=Utility;
